@@ -2774,6 +2774,107 @@ h1, h2 {
     font-size: 0.9rem;
     margin-top: 5px;
 }
-# ==========================================================
+from flask import Flask, render_template, redirect, url_for, flash
+from forms.producto_form import ProductoForm
+import sqlite3
+import os
 
-T
+app = Flask(__name__)
+app.config["SECRET_KEY"] = "clave-secreta-proyecto"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DATABASE = os.path.join(DATA_DIR, "ferreteria.db")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            descripcion TEXT NOT NULL,
+            precio REAL NOT NULL,
+            stock INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/productos", methods=["GET", "POST"])
+def productos():
+    form = ProductoForm()
+    if form.validate_on_submit():
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT INTO productos (nombre, descripcion, precio, stock) VALUES (?, ?, ?, ?)",
+            (
+                form.nombre.data,
+                form.descripcion.data,
+                form.precio.data,
+                form.stock.data
+            )
+        )
+        conn.commit()
+        conn.close()
+        flash("Producto registrado correctamente.", "success")
+        return redirect(url_for("productos"))
+    conn = get_db_connection()
+    productos = conn.execute("SELECT id, nombre, descripcion, precio, stock FROM productos ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template("productos.html", form=form, productos=productos)
+
+@app.route("/productos/nuevo", methods=["GET", "POST"])
+def nuevo_producto():
+    form = ProductoForm()
+    if form.validate_on_submit():
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT INTO productos (nombre, descripcion, precio, stock) VALUES (?, ?, ?, ?)",
+            (
+                form.nombre.data,
+                form.descripcion.data,
+                form.precio.data,
+                form.stock.data
+            )
+        )
+        conn.commit()
+        conn.close()
+        flash("Producto guardado correctamente.", "success")
+        return redirect(url_for("productos"))
+    return render_template("formulario_producto.html", form=form)
+
+@app.route("/productos/eliminar/<int:id>", methods=["POST"])
+def eliminar_producto(id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM productos WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    flash("Producto eliminado correctamente.", "success")
+    return redirect(url_for("productos"))
+
+@app.route("/clientes")
+def clientes():
+    return render_template("clientes.html")
+
+@app.route("/proveedores")
+def proveedores():
+    return render_template("proveedores.html")
+
+@app.route("/facturacion")
+def facturacion():
+    return render_template("facturacion.html")
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True)
