@@ -2878,3 +2878,985 @@ def facturacion():
 if __name__ == "__main__":
     init_db()
     app.run(debug=True)
+
+
+    ==================================================
+ESTRUCTURA DEL PROYECTO
+==================================================
+
+Proyecto_Ferreteria/
+│
+├── app.py
+├── requirements.txt
+├── .env
+├── .gitignore
+│
+├── conexion/
+│   ├── __init__.py
+│   └── conexion.py
+│
+├── sql/
+│   └── esquema.sql
+│
+├── forms/
+│   ├── __init__.py
+│   └── producto_form.py
+│
+├── templates/
+│   ├── base.html
+│   ├── index.html
+│   ├── productos.html
+│   └── formulario_producto.html
+│
+└── static/
+    └── css/
+        └── style.css
+
+
+==================================================
+ARCHIVO: requirements.txt
+==================================================
+
+Flask
+Flask-WTF
+WTForms
+mysql-connector-python
+python-dotenv
+
+
+==================================================
+ARCHIVO: .env
+==================================================
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=TU_CONTRASEÑA_DE_MYSQL
+DB_NAME=ferreteria_db
+
+
+==================================================
+ARCHIVO: .gitignore
+==================================================
+
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+
+==================================================
+ARCHIVO: conexion/__init__.py
+==================================================
+
+(Puede permanecer vacío)
+
+
+==================================================
+ARCHIVO: conexion/conexion.py
+==================================================
+
+import os
+import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def obtener_conexion():
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=int(os.getenv("DB_PORT", "3306")),
+        user=os.getenv("DB_USER", "root"),
+        password=os.getenv("DB_PASSWORD", ""),
+        database=os.getenv("DB_NAME", "ferreteria_db")
+    )
+
+
+==================================================
+ARCHIVO: sql/esquema.sql
+==================================================
+
+CREATE DATABASE IF NOT EXISTS ferreteria_db
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+USE ferreteria_db;
+
+CREATE TABLE IF NOT EXISTS proveedores (
+    id_proveedor INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    telefono VARCHAR(20),
+    correo VARCHAR(100)
+);
+
+CREATE TABLE IF NOT EXISTS clientes (
+    id_cliente INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    cedula VARCHAR(20) UNIQUE,
+    telefono VARCHAR(20),
+    correo VARCHAR(100)
+);
+
+CREATE TABLE IF NOT EXISTS productos (
+    id_producto INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    precio DECIMAL(10,2) NOT NULL,
+    stock INT NOT NULL DEFAULT 0,
+    id_proveedor INT,
+    CONSTRAINT fk_producto_proveedor
+        FOREIGN KEY (id_proveedor)
+        REFERENCES proveedores(id_proveedor)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS facturas (
+    id_factura INT AUTO_INCREMENT PRIMARY KEY,
+    id_cliente INT,
+    fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
+    total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    CONSTRAINT fk_factura_cliente
+        FOREIGN KEY (id_cliente)
+        REFERENCES clientes(id_cliente)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL
+);
+
+INSERT INTO proveedores (nombre, telefono, correo)
+SELECT 'Distribuidora Ferretera S.A.', '0991234567',
+       'ventas@distribuidora.com'
+WHERE NOT EXISTS (
+    SELECT 1 FROM proveedores
+    WHERE correo = 'ventas@distribuidora.com'
+);
+
+INSERT INTO proveedores (nombre, telefono, correo)
+SELECT 'Importadora El Constructor', '0987654321',
+       'contacto@constructor.com'
+WHERE NOT EXISTS (
+    SELECT 1 FROM proveedores
+    WHERE correo = 'contacto@constructor.com'
+);
+
+
+==================================================
+ARCHIVO: forms/__init__.py
+==================================================
+
+(Puede permanecer vacío)
+
+
+==================================================
+ARCHIVO: forms/producto_form.py
+==================================================
+
+from flask_wtf import FlaskForm
+from wtforms import StringField, DecimalField, IntegerField, SelectField, SubmitField
+from wtforms.validators import DataRequired, Length, NumberRange, Optional
+
+
+class ProductoForm(FlaskForm):
+
+    nombre = StringField(
+        "Nombre del producto",
+        validators=[
+            DataRequired(message="El nombre es obligatorio."),
+            Length(
+                min=2,
+                max=100,
+                message="El nombre debe tener entre 2 y 100 caracteres."
+            )
+        ]
+    )
+
+    precio = DecimalField(
+        "Precio",
+        validators=[
+            DataRequired(message="El precio es obligatorio."),
+            NumberRange(
+                min=0,
+                message="El precio no puede ser negativo."
+            )
+        ],
+        places=2
+    )
+
+    stock = IntegerField(
+        "Stock",
+        validators=[
+            DataRequired(message="El stock es obligatorio."),
+            NumberRange(
+                min=0,
+                message="El stock no puede ser negativo."
+            )
+        ]
+    )
+
+    id_proveedor = SelectField(
+        "Proveedor",
+        coerce=int,
+        validators=[Optional()]
+    )
+
+    submit = SubmitField("Guardar producto")
+
+
+==================================================
+ARCHIVO: app.py
+==================================================
+
+from flask import Flask, render_template, redirect, url_for, flash, request
+from dotenv import load_dotenv
+
+from conexion.conexion import obtener_conexion
+from forms.producto_form import ProductoForm
+
+load_dotenv()
+
+app = Flask(__name__)
+
+app.config["SECRET_KEY"] = "clave-desarrollo-ferreteria-2026"
+
+
+def obtener_proveedores():
+    conexion = None
+    cursor = None
+
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT id_proveedor, nombre
+            FROM proveedores
+            ORDER BY nombre ASC
+        """)
+
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error al obtener proveedores: {error}")
+        return []
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if conexion is not None and conexion.is_connected():
+            conexion.close()
+
+
+def cargar_opciones_proveedores(form):
+    proveedores = obtener_proveedores()
+
+    form.id_proveedor.choices = [
+        (0, "Sin proveedor")
+    ] + [
+        (proveedor["id_proveedor"], proveedor["nombre"])
+        for proveedor in proveedores
+    ]
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/productos")
+def productos():
+    conexion = None
+    cursor = None
+    productos_registrados = []
+
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor(dictionary=True)
+
+        consulta = """
+            SELECT
+                p.id_producto,
+                p.nombre,
+                p.precio,
+                p.stock,
+                p.id_proveedor,
+                COALESCE(pr.nombre, 'Sin proveedor') AS proveedor
+            FROM productos p
+            LEFT JOIN proveedores pr
+                ON p.id_proveedor = pr.id_proveedor
+            ORDER BY p.id_producto DESC
+        """
+
+        cursor.execute(consulta)
+        productos_registrados = cursor.fetchall()
+
+    except Exception as error:
+        flash(f"Error al consultar los productos: {error}", "danger")
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if conexion is not None and conexion.is_connected():
+            conexion.close()
+
+    return render_template(
+        "productos.html",
+        productos=productos_registrados
+    )
+
+
+@app.route("/productos/nuevo", methods=["GET", "POST"])
+def nuevo_producto():
+    form = ProductoForm()
+    cargar_opciones_proveedores(form)
+
+    if form.validate_on_submit():
+        conexion = None
+        cursor = None
+
+        try:
+            conexion = obtener_conexion()
+            cursor = conexion.cursor()
+
+            id_proveedor = form.id_proveedor.data
+
+            if id_proveedor == 0:
+                id_proveedor = None
+
+            consulta = """
+                INSERT INTO productos
+                    (nombre, precio, stock, id_proveedor)
+                VALUES (%s, %s, %s, %s)
+            """
+
+            valores = (
+                form.nombre.data,
+                form.precio.data,
+                form.stock.data,
+                id_proveedor
+            )
+
+            cursor.execute(consulta, valores)
+            conexion.commit()
+
+            flash(
+                "Producto agregado correctamente a MySQL.",
+                "success"
+            )
+
+            return redirect(url_for("productos"))
+
+        except Exception as error:
+            if conexion is not None:
+                conexion.rollback()
+
+            flash(
+                f"Error al agregar el producto: {error}",
+                "danger"
+            )
+
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    return render_template(
+        "formulario_producto.html",
+        form=form,
+        titulo="Agregar producto"
+    )
+
+
+@app.route("/productos/editar/<int:id_producto>", methods=["GET", "POST"])
+def editar_producto(id_producto):
+    conexion = None
+    cursor = None
+    producto = None
+
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT id_producto, nombre, precio, stock, id_proveedor
+            FROM productos
+            WHERE id_producto = %s
+        """, (id_producto,))
+
+        producto = cursor.fetchone()
+
+    except Exception as error:
+        flash(
+            f"Error al recuperar el producto: {error}",
+            "danger"
+        )
+
+        return redirect(url_for("productos"))
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if conexion is not None and conexion.is_connected():
+            conexion.close()
+
+    if producto is None:
+        flash("El producto no existe.", "warning")
+        return redirect(url_for("productos"))
+
+    form = ProductoForm()
+    cargar_opciones_proveedores(form)
+
+    if request.method == "GET":
+        form.nombre.data = producto["nombre"]
+        form.precio.data = producto["precio"]
+        form.stock.data = producto["stock"]
+        form.id_proveedor.data = producto["id_proveedor"] or 0
+
+    if form.validate_on_submit():
+        conexion = None
+        cursor = None
+
+        try:
+            conexion = obtener_conexion()
+            cursor = conexion.cursor()
+
+            id_proveedor = form.id_proveedor.data
+
+            if id_proveedor == 0:
+                id_proveedor = None
+
+            consulta = """
+                UPDATE productos
+                SET nombre = %s,
+                    precio = %s,
+                    stock = %s,
+                    id_proveedor = %s
+                WHERE id_producto = %s
+            """
+
+            valores = (
+                form.nombre.data,
+                form.precio.data,
+                form.stock.data,
+                id_proveedor,
+                id_producto
+            )
+
+            cursor.execute(consulta, valores)
+            conexion.commit()
+
+            flash(
+                "Producto modificado correctamente en MySQL.",
+                "success"
+            )
+
+            return redirect(url_for("productos"))
+
+        except Exception as error:
+            if conexion is not None:
+                conexion.rollback()
+
+            flash(
+                f"Error al modificar el producto: {error}",
+                "danger"
+            )
+
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    return render_template(
+        "formulario_producto.html",
+        form=form,
+        titulo="Modificar producto"
+    )
+
+
+@app.route("/productos/eliminar/<int:id_producto>", methods=["POST"])
+def eliminar_producto(id_producto):
+    conexion = None
+    cursor = None
+
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor()
+
+        consulta = """
+            DELETE FROM productos
+            WHERE id_producto = %s
+        """
+
+        cursor.execute(consulta, (id_producto,))
+        conexion.commit()
+
+        if cursor.rowcount > 0:
+            flash(
+                "Producto eliminado correctamente de MySQL.",
+                "success"
+            )
+        else:
+            flash("El producto no existe.", "warning")
+
+    except Exception as error:
+        if conexion is not None:
+            conexion.rollback()
+
+        flash(
+            f"Error al eliminar el producto: {error}",
+            "danger"
+        )
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if conexion is not None and conexion.is_connected():
+            conexion.close()
+
+    return redirect(url_for("productos"))
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
+==================================================
+ARCHIVO: templates/base.html
+==================================================
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>{% block title %}Ferretería{% endblock %}</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+          rel="stylesheet">
+
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body class="bg-light">
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+
+            <a class="navbar-brand fw-bold"
+               href="{{ url_for('index') }}">
+                Ferretería El Constructor
+            </a>
+
+            <button class="navbar-toggler"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#menu">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <div class="collapse navbar-collapse" id="menu">
+                <ul class="navbar-nav ms-auto">
+
+                    <li class="nav-item">
+                        <a class="nav-link"
+                           href="{{ url_for('index') }}">
+                            Inicio
+                        </a>
+                    </li>
+
+                    <li class="nav-item">
+                        <a class="nav-link"
+                           href="{{ url_for('productos') }}">
+                            Productos
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+        </div>
+    </nav>
+
+    <main class="container py-4">
+
+        {% with mensajes = get_flashed_messages(with_categories=true) %}
+            {% if mensajes %}
+                {% for categoria, mensaje in mensajes %}
+
+                    <div class="alert alert-{{ categoria }} alert-dismissible fade show"
+                         role="alert">
+
+                        {{ mensaje }}
+
+                        <button type="button"
+                                class="btn-close"
+                                data-bs-dismiss="alert">
+                        </button>
+
+                    </div>
+
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+
+    </main>
+
+    <footer class="bg-dark text-white text-center py-3 mt-5">
+        <p class="mb-0">
+            Proyecto Integrador — Gestión de Ferretería
+        </p>
+
+        <small>
+            Flask + MySQL + Flask-WTF
+        </small>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+</body>
+</html>
+
+
+==================================================
+ARCHIVO: templates/index.html
+==================================================
+
+{% extends "base.html" %}
+
+{% block title %}Inicio - Ferretería{% endblock %}
+
+{% block content %}
+
+<div class="p-5 mb-4 bg-white rounded-3 shadow-sm">
+
+    <div class="container-fluid py-4">
+
+        <h1 class="display-5 fw-bold">
+            Sistema de Gestión de Ferretería
+        </h1>
+
+        <p class="col-md-8 fs-5">
+            Aplicación web desarrollada con Flask, Flask-WTF y MySQL
+            para administrar productos y proveedores.
+        </p>
+
+        <a href="{{ url_for('productos') }}"
+           class="btn btn-primary btn-lg">
+            Administrar productos
+        </a>
+
+    </div>
+
+</div>
+
+<div class="row g-4">
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h5 class="card-title">Base de datos</h5>
+                <p class="card-text">
+                    Información almacenada de forma persistente en MySQL.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h5 class="card-title">Productos</h5>
+                <p class="card-text">
+                    Registro, consulta, modificación y eliminación
+                    de productos.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h5 class="card-title">Validaciones</h5>
+                <p class="card-text">
+                    Formularios validados mediante Flask-WTF y WTForms.
+                </p>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% endblock %}
+
+
+==================================================
+ARCHIVO: templates/productos.html
+==================================================
+
+{% extends "base.html" %}
+
+{% block title %}Productos - Ferretería{% endblock %}
+
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+
+    <div>
+        <h1 class="mb-1">Productos</h1>
+        <p class="text-muted mb-0">
+            Registros almacenados en la base de datos MySQL.
+        </p>
+    </div>
+
+    <a href="{{ url_for('nuevo_producto') }}"
+       class="btn btn-success">
+        + Agregar producto
+    </a>
+
+</div>
+
+<div class="card shadow-sm">
+
+    <div class="card-body">
+
+        {% if productos %}
+
+        <div class="table-responsive">
+
+            <table class="table table-striped table-hover align-middle">
+
+                <thead class="table-primary">
+                    <tr>
+                        <th>ID</th>
+                        <th>Producto</th>
+                        <th>Precio</th>
+                        <th>Stock</th>
+                        <th>Proveedor</th>
+                        <th class="text-center">Acciones</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for producto in productos %}
+
+                    <tr>
+
+                        <td>{{ producto.id_producto }}</td>
+
+                        <td>{{ producto.nombre }}</td>
+
+                        <td>
+                            ${{ "%.2f"|format(producto.precio) }}
+                        </td>
+
+                        <td>{{ producto.stock }}</td>
+
+                        <td>{{ producto.proveedor }}</td>
+
+                        <td class="text-center">
+
+                            <a href="{{ url_for('editar_producto', id_producto=producto.id_producto) }}"
+                               class="btn btn-warning btn-sm">
+                                Editar
+                            </a>
+
+                            <form action="{{ url_for('eliminar_producto', id_producto=producto.id_producto) }}"
+                                  method="POST"
+                                  class="d-inline"
+                                  onsubmit="return confirm('¿Está seguro de eliminar este producto?');">
+
+                                <input type="hidden"
+                                       name="csrf_token"
+                                       value="{{ csrf_token() }}">
+
+                                <button type="submit"
+                                        class="btn btn-danger btn-sm">
+                                    Eliminar
+                                </button>
+
+                            </form>
+
+                        </td>
+
+                    </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+        {% else %}
+
+        <div class="alert alert-info mb-0">
+            No existen productos registrados en la base de datos.
+        </div>
+
+        {% endif %}
+
+    </div>
+
+</div>
+
+{% endblock %}
+
+
+==================================================
+ARCHIVO: templates/formulario_producto.html
+==================================================
+
+{% extends "base.html" %}
+
+{% block title %}{{ titulo }} - Ferretería{% endblock %}
+
+{% block content %}
+
+<div class="row justify-content-center">
+
+    <div class="col-md-7 col-lg-6">
+
+        <div class="card shadow-sm">
+
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">{{ titulo }}</h4>
+            </div>
+
+            <div class="card-body">
+
+                <form method="POST">
+
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+
+                        {{ form.nombre.label(class="form-label") }}
+
+                        {{ form.nombre(
+                            class="form-control",
+                            placeholder="Ejemplo: Martillo"
+                        ) }}
+
+                        {% for error in form.nombre.errors %}
+                            <div class="text-danger small">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.precio.label(class="form-label") }}
+
+                        {{ form.precio(
+                            class="form-control",
+                            placeholder="Ejemplo: 15.50",
+                            step="0.01"
+                        ) }}
+
+                        {% for error in form.precio.errors %}
+                            <div class="text-danger small">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.stock.label(class="form-label") }}
+
+                        {{ form.stock(
+                            class="form-control",
+                            placeholder="Ejemplo: 25"
+                        ) }}
+
+                        {% for error in form.stock.errors %}
+                            <div class="text-danger small">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.id_proveedor.label(class="form-label") }}
+
+                        {{ form.id_proveedor(class="form-select") }}
+
+                        {% for error in form.id_proveedor.errors %}
+                            <div class="text-danger small">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+
+                    </div>
+
+                    <div class="d-flex justify-content-between">
+
+                        <a href="{{ url_for('productos') }}"
+                           class="btn btn-secondary">
+                            Cancelar
+                        </a>
+
+                        {{ form.submit(class="btn btn-primary") }}
+
+                    </div>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}
+
+
+==================================================
+ARCHIVO: static/css/style.css
+==================================================
+
+body {
+    font-family: Arial, sans-serif;
+}
+
+.navbar-brand {
+    letter-spacing: 0.3px;
+}
+
+.card {
+    border: none;
+}
+
+.table th {
+    white-space: nowrap;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+footer {
+    margin-top: 50px;
+}
