@@ -3860,3 +3860,1543 @@ body {
 footer {
     margin-top: 50px;
 }
+# ============================================================
+# PROYECTO INTEGRADOR U4 - AVANCE 14/16
+# IMPLEMENTACIÓN DE UN SISTEMA DE LOGIN FUNCIONAL
+# FLASK + MYSQL + FLASK-LOGIN + FLASK-WTF + WERKZEUG
+# ============================================================
+#
+# INSTALAR:
+# pip install flask flask-login flask-wtf mysql-connector-python werkzeug
+# pip freeze > requirements.txt
+#
+# ESTRUCTURA:
+#
+# Proyecto/
+# ├── app.py
+# ├── models.py
+# ├── requirements.txt
+# ├── conexion/
+# │   ├── __init__.py
+# │   └── conexion.py
+# ├── forms/
+# │   ├── __init__.py
+# │   ├── login_form.py
+# │   └── usuario_form.py
+# ├── sql/
+# │   └── esquema.sql
+# ├── templates/
+# │   ├── base.html
+# │   ├── index.html
+# │   ├── login.html
+# │   ├── registro.html
+# │   ├── dashboard.html
+# │   ├── productos.html
+# │   ├── clientes.html
+# │   ├── proveedores.html
+# │   └── facturacion.html
+# └── static/
+#     └── css/
+#         └── style.css
+#
+# ============================================================
+# 1. BASE DE DATOS MYSQL
+# ============================================================
+#
+# CREATE DATABASE proyecto_integrador;
+# USE proyecto_integrador;
+#
+# CREATE TABLE usuarios (
+#     id INT AUTO_INCREMENT PRIMARY KEY,
+#     usuario VARCHAR(50) UNIQUE NOT NULL,
+#     password VARCHAR(255) NOT NULL
+# );
+#
+# ------------------------------------------------------------
+# TABLAS DEL CRUD DE SEMANA 13
+# Estas tablas deben mantenerse si ya las tienes.
+# Ejemplo:
+#
+# CREATE TABLE productos (
+#     id INT AUTO_INCREMENT PRIMARY KEY,
+#     nombre VARCHAR(100) NOT NULL,
+#     precio DECIMAL(10,2) NOT NULL,
+#     stock INT NOT NULL
+# );
+#
+# CREATE TABLE clientes (
+#     id INT AUTO_INCREMENT PRIMARY KEY,
+#     nombre VARCHAR(100) NOT NULL,
+#     correo VARCHAR(100) NOT NULL,
+#     telefono VARCHAR(20)
+# );
+#
+# CREATE TABLE proveedores (
+#     id INT AUTO_INCREMENT PRIMARY KEY,
+#     nombre VARCHAR(100) NOT NULL,
+#     telefono VARCHAR(20),
+#     correo VARCHAR(100)
+# );
+#
+# CREATE TABLE facturacion (
+#     id INT AUTO_INCREMENT PRIMARY KEY,
+#     cliente VARCHAR(100) NOT NULL,
+#     producto VARCHAR(100) NOT NULL,
+#     cantidad INT NOT NULL,
+#     total DECIMAL(10,2) NOT NULL
+# );
+#
+# ============================================================
+# 2. conexion/conexion.py
+# ============================================================
+
+import mysql.connector
+
+def obtener_conexion():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="TU_PASSWORD",
+        database="proyecto_integrador"
+    )
+
+
+# ============================================================
+# 3. models.py
+# ============================================================
+
+from flask_login import UserMixin
+
+
+class Usuario(UserMixin):
+
+    def __init__(self, id, usuario, password):
+        self.id = id
+        self.usuario = usuario
+        self.password = password
+
+
+# ============================================================
+# 4. forms/login_form.py
+# ============================================================
+
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField
+from wtforms.validators import DataRequired
+
+
+class LoginForm(FlaskForm):
+
+    usuario = StringField(
+        "Usuario",
+        validators=[DataRequired()]
+    )
+
+    password = PasswordField(
+        "Contraseña",
+        validators=[DataRequired()]
+    )
+
+    submit = SubmitField(
+        "Iniciar sesión"
+    )
+
+
+# ============================================================
+# 5. forms/usuario_form.py
+# ============================================================
+
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField
+from wtforms.validators import (
+    DataRequired,
+    Length,
+    EqualTo
+)
+
+
+class UsuarioForm(FlaskForm):
+
+    usuario = StringField(
+        "Usuario",
+        validators=[
+            DataRequired(),
+            Length(min=3, max=50)
+        ]
+    )
+
+    password = PasswordField(
+        "Contraseña",
+        validators=[
+            DataRequired(),
+            Length(min=6, max=100)
+        ]
+    )
+
+    confirmar_password = PasswordField(
+        "Confirmar contraseña",
+        validators=[
+            DataRequired(),
+            EqualTo(
+                "password",
+                message="Las contraseñas no coinciden."
+            )
+        ]
+    )
+
+    submit = SubmitField(
+        "Registrarse"
+    )
+
+
+# ============================================================
+# 6. app.py
+# ============================================================
+
+from flask import (
+    Flask,
+    render_template,
+    redirect,
+    url_for,
+    flash,
+    request
+)
+
+from flask_login import (
+    LoginManager,
+    login_user,
+    logout_user,
+    login_required,
+    current_user
+)
+
+from werkzeug.security import (
+    generate_password_hash,
+    check_password_hash
+)
+
+from conexion.conexion import obtener_conexion
+
+from models import Usuario
+
+from forms.login_form import LoginForm
+
+from forms.usuario_form import UsuarioForm
+
+
+# ------------------------------------------------------------
+# CONFIGURACIÓN DE FLASK
+# ------------------------------------------------------------
+
+app = Flask(__name__)
+
+app.config["SECRET_KEY"] = "clave-secreta-proyecto-integrador"
+
+
+# ------------------------------------------------------------
+# CONFIGURACIÓN FLASK-LOGIN
+# ------------------------------------------------------------
+
+login_manager = LoginManager()
+
+login_manager.init_app(app)
+
+login_manager.login_view = "login"
+
+login_manager.login_message = (
+    "Debe iniciar sesión para acceder a esta página."
+)
+
+login_manager.login_message_category = "warning"
+
+
+# ------------------------------------------------------------
+# CARGAR USUARIO
+# ------------------------------------------------------------
+
+@login_manager.user_loader
+def load_user(user_id):
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor(
+        dictionary=True
+    )
+
+    cursor.execute(
+        """
+        SELECT id, usuario, password
+        FROM usuarios
+        WHERE id = %s
+        """,
+        (user_id,)
+    )
+
+    datos = cursor.fetchone()
+
+    cursor.close()
+
+    conexion.close()
+
+    if datos:
+
+        return Usuario(
+            datos["id"],
+            datos["usuario"],
+            datos["password"]
+        )
+
+    return None
+
+
+# ============================================================
+# PÁGINA PRINCIPAL
+# ============================================================
+
+@app.route("/")
+def index():
+
+    return render_template(
+        "index.html"
+    )
+
+
+# ============================================================
+# REGISTRO DE USUARIO
+# ============================================================
+
+@app.route(
+    "/registro",
+    methods=["GET", "POST"]
+)
+def registro():
+
+    form = UsuarioForm()
+
+    if form.validate_on_submit():
+
+        usuario = form.usuario.data
+
+        password = form.password.data
+
+        conexion = obtener_conexion()
+
+        cursor = conexion.cursor(
+            dictionary=True
+        )
+
+        # Verificar si ya existe
+        cursor.execute(
+            """
+            SELECT id
+            FROM usuarios
+            WHERE usuario = %s
+            """,
+            (usuario,)
+        )
+
+        usuario_existente = cursor.fetchone()
+
+        if usuario_existente:
+
+            cursor.close()
+
+            conexion.close()
+
+            flash(
+                "El usuario ya existe.",
+                "danger"
+            )
+
+            return render_template(
+                "registro.html",
+                form=form
+            )
+
+        # ----------------------------------------------------
+        # CREAR HASH SEGURO
+        # ----------------------------------------------------
+
+        password_hash = generate_password_hash(
+            password
+        )
+
+        # ----------------------------------------------------
+        # INSERT PARAMETRIZADO
+        # ----------------------------------------------------
+
+        cursor.execute(
+            """
+            INSERT INTO usuarios
+            (usuario, password)
+            VALUES (%s, %s)
+            """,
+            (
+                usuario,
+                password_hash
+            )
+        )
+
+        conexion.commit()
+
+        cursor.close()
+
+        conexion.close()
+
+        flash(
+            "Usuario registrado correctamente.",
+            "success"
+        )
+
+        return redirect(
+            url_for("login")
+        )
+
+    return render_template(
+        "registro.html",
+        form=form
+    )
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+@app.route(
+    "/login",
+    methods=["GET", "POST"]
+)
+def login():
+
+    if current_user.is_authenticated:
+
+        return redirect(
+            url_for("dashboard")
+        )
+
+    form = LoginForm()
+
+    if form.validate_on_submit():
+
+        usuario = form.usuario.data
+
+        password = form.password.data
+
+        conexion = obtener_conexion()
+
+        cursor = conexion.cursor(
+            dictionary=True
+        )
+
+        # ----------------------------------------------------
+        # BUSCAR USUARIO
+        # ----------------------------------------------------
+
+        cursor.execute(
+            """
+            SELECT id, usuario, password
+            FROM usuarios
+            WHERE usuario = %s
+            """,
+            (usuario,)
+        )
+
+        datos = cursor.fetchone()
+
+        cursor.close()
+
+        conexion.close()
+
+        # ----------------------------------------------------
+        # COMPROBAR CONTRASEÑA
+        # ----------------------------------------------------
+
+        if datos and check_password_hash(
+            datos["password"],
+            password
+        ):
+
+            usuario_obj = Usuario(
+                datos["id"],
+                datos["usuario"],
+                datos["password"]
+            )
+
+            # ------------------------------------------------
+            # CREAR SESIÓN
+            # ------------------------------------------------
+
+            login_user(
+                usuario_obj
+            )
+
+            flash(
+                "Inicio de sesión exitoso.",
+                "success"
+            )
+
+            # Si intentó entrar a una ruta protegida
+            siguiente = request.args.get(
+                "next"
+            )
+
+            if siguiente:
+                return redirect(siguiente)
+
+            return redirect(
+                url_for("dashboard")
+            )
+
+        flash(
+            "Usuario o contraseña incorrectos.",
+            "danger"
+        )
+
+    return render_template(
+        "login.html",
+        form=form
+    )
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+
+    return render_template(
+        "dashboard.html"
+    )
+
+
+# ============================================================
+# PRODUCTOS
+# ============================================================
+
+@app.route("/productos")
+@login_required
+def productos():
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor(
+        dictionary=True
+    )
+
+    cursor.execute(
+        "SELECT * FROM productos"
+    )
+
+    productos = cursor.fetchall()
+
+    cursor.close()
+
+    conexion.close()
+
+    return render_template(
+        "productos.html",
+        productos=productos
+    )
+
+
+# ============================================================
+# CLIENTES
+# ============================================================
+
+@app.route("/clientes")
+@login_required
+def clientes():
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor(
+        dictionary=True
+    )
+
+    cursor.execute(
+        "SELECT * FROM clientes"
+    )
+
+    clientes = cursor.fetchall()
+
+    cursor.close()
+
+    conexion.close()
+
+    return render_template(
+        "clientes.html",
+        clientes=clientes
+    )
+
+
+# ============================================================
+# PROVEEDORES
+# ============================================================
+
+@app.route("/proveedores")
+@login_required
+def proveedores():
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor(
+        dictionary=True
+    )
+
+    cursor.execute(
+        "SELECT * FROM proveedores"
+    )
+
+    proveedores = cursor.fetchall()
+
+    cursor.close()
+
+    conexion.close()
+
+    return render_template(
+        "proveedores.html",
+        proveedores=proveedores
+    )
+
+
+# ============================================================
+# FACTURACIÓN
+# ============================================================
+
+@app.route("/facturacion")
+@login_required
+def facturacion():
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor(
+        dictionary=True
+    )
+
+    cursor.execute(
+        "SELECT * FROM facturacion"
+    )
+
+    facturas = cursor.fetchall()
+
+    cursor.close()
+
+    conexion.close()
+
+    return render_template(
+        "facturacion.html",
+        facturas=facturas
+    )
+
+
+# ============================================================
+# LOGOUT
+# ============================================================
+
+@app.route("/logout")
+@login_required
+def logout():
+
+    logout_user()
+
+    flash(
+        "Sesión cerrada correctamente.",
+        "success"
+    )
+
+    return redirect(
+        url_for("login")
+    )
+
+
+# ============================================================
+# EJECUTAR APLICACIÓN
+# ============================================================
+
+if __name__ == "__main__":
+
+    app.run(
+        debug=True
+    )
+
+
+# ============================================================
+# 7. templates/base.html
+# ============================================================
+
+"""
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        {% block title %}
+        Sistema Web
+        {% endblock %}
+    </title>
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+
+</head>
+
+<body>
+
+<nav class="navbar navbar-dark bg-dark">
+
+    <div class="container">
+
+        <a
+            class="navbar-brand"
+            href="{{ url_for('index') }}"
+        >
+            Sistema de Gestión
+        </a>
+
+        <div>
+
+            {% if current_user.is_authenticated %}
+
+                <span class="text-white me-3">
+
+                    Usuario:
+                    {{ current_user.usuario }}
+
+                </span>
+
+                <a
+                    href="{{ url_for('dashboard') }}"
+                    class="btn btn-outline-light me-2"
+                >
+                    Dashboard
+                </a>
+
+                <a
+                    href="{{ url_for('logout') }}"
+                    class="btn btn-danger"
+                >
+                    Cerrar sesión
+                </a>
+
+            {% else %}
+
+                <a
+                    href="{{ url_for('login') }}"
+                    class="btn btn-outline-light me-2"
+                >
+                    Iniciar sesión
+                </a>
+
+                <a
+                    href="{{ url_for('registro') }}"
+                    class="btn btn-success"
+                >
+                    Registrarse
+                </a>
+
+            {% endif %}
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<div class="container mt-4">
+
+    {% with mensajes =
+        get_flashed_messages(
+            with_categories=true
+        )
+    %}
+
+        {% if mensajes %}
+
+            {% for categoria, mensaje in mensajes %}
+
+                <div
+                    class="alert alert-{{ categoria }}"
+                >
+                    {{ mensaje }}
+                </div>
+
+            {% endfor %}
+
+        {% endif %}
+
+    {% endwith %}
+
+
+    {% block content %}
+    {% endblock %}
+
+</div>
+
+</body>
+
+</html>
+"""
+
+
+# ============================================================
+# 8. templates/index.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Inicio
+{% endblock %}
+
+{% block content %}
+
+<div class="text-center mt-5">
+
+    <h1>
+        Sistema de Gestión
+    </h1>
+
+    <p class="lead">
+        Proyecto Integrador U4
+    </p>
+
+    <p>
+        Desarrollo de Aplicaciones Web
+    </p>
+
+    {% if current_user.is_authenticated %}
+
+        <a
+            href="{{ url_for('dashboard') }}"
+            class="btn btn-primary"
+        >
+            Ir al Dashboard
+        </a>
+
+    {% else %}
+
+        <a
+            href="{{ url_for('login') }}"
+            class="btn btn-primary me-2"
+        >
+            Iniciar sesión
+        </a>
+
+        <a
+            href="{{ url_for('registro') }}"
+            class="btn btn-success"
+        >
+            Registrarse
+        </a>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 9. templates/login.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Iniciar sesión
+{% endblock %}
+
+{% block content %}
+
+<div class="row justify-content-center">
+
+    <div class="col-md-5">
+
+        <div class="card shadow">
+
+            <div class="card-header bg-primary text-white">
+
+                <h3 class="text-center">
+                    Iniciar sesión
+                </h3>
+
+            </div>
+
+            <div class="card-body">
+
+                <form method="POST">
+
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+
+                        {{ form.usuario.label(
+                            class="form-label"
+                        ) }}
+
+                        {{ form.usuario(
+                            class="form-control",
+                            placeholder="Ingrese usuario"
+                        ) }}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.password.label(
+                            class="form-label"
+                        ) }}
+
+                        {{ form.password(
+                            class="form-control",
+                            placeholder="Ingrese contraseña"
+                        ) }}
+
+                    </div>
+
+                    <div class="d-grid">
+
+                        {{ form.submit(
+                            class="btn btn-primary"
+                        ) }}
+
+                    </div>
+
+                </form>
+
+                <div class="text-center mt-3">
+
+                    <a
+                        href="{{ url_for('registro') }}"
+                    >
+                        Crear una cuenta
+                    </a>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 10. templates/registro.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Registro
+{% endblock %}
+
+{% block content %}
+
+<div class="row justify-content-center">
+
+    <div class="col-md-5">
+
+        <div class="card shadow">
+
+            <div class="card-header bg-success text-white">
+
+                <h3 class="text-center">
+                    Registro de usuario
+                </h3>
+
+            </div>
+
+            <div class="card-body">
+
+                <form method="POST">
+
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+
+                        {{ form.usuario.label(
+                            class="form-label"
+                        ) }}
+
+                        {{ form.usuario(
+                            class="form-control"
+                        ) }}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.password.label(
+                            class="form-label"
+                        ) }}
+
+                        {{ form.password(
+                            class="form-control"
+                        ) }}
+
+                    </div>
+
+                    <div class="mb-3">
+
+                        {{ form.confirmar_password.label(
+                            class="form-label"
+                        ) }}
+
+                        {{ form.confirmar_password(
+                            class="form-control"
+                        ) }}
+
+                    </div>
+
+                    <div class="d-grid">
+
+                        {{ form.submit(
+                            class="btn btn-success"
+                        ) }}
+
+                    </div>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 11. templates/dashboard.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Dashboard
+{% endblock %}
+
+{% block content %}
+
+<div class="text-center">
+
+    <h1>
+        Panel de Administración
+    </h1>
+
+    <p class="lead">
+
+        Bienvenido,
+        <strong>
+            {{ current_user.usuario }}
+        </strong>
+
+    </p>
+
+</div>
+
+
+<div class="row mt-4">
+
+    <div class="col-md-3 mb-3">
+
+        <a
+            href="{{ url_for('productos') }}"
+            class="btn btn-primary w-100 p-3"
+        >
+            Productos
+        </a>
+
+    </div>
+
+
+    <div class="col-md-3 mb-3">
+
+        <a
+            href="{{ url_for('clientes') }}"
+            class="btn btn-success w-100 p-3"
+        >
+            Clientes
+        </a>
+
+    </div>
+
+
+    <div class="col-md-3 mb-3">
+
+        <a
+            href="{{ url_for('proveedores') }}"
+            class="btn btn-warning w-100 p-3"
+        >
+            Proveedores
+        </a>
+
+    </div>
+
+
+    <div class="col-md-3 mb-3">
+
+        <a
+            href="{{ url_for('facturacion') }}"
+            class="btn btn-info w-100 p-3"
+        >
+            Facturación
+        </a>
+
+    </div>
+
+</div>
+
+
+<div class="text-center mt-4">
+
+    <a
+        href="{{ url_for('logout') }}"
+        class="btn btn-danger"
+    >
+        Cerrar sesión
+    </a>
+
+</div>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 12. templates/productos.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Productos
+{% endblock %}
+
+{% block content %}
+
+<h1>
+    Productos
+</h1>
+
+<p>
+    Usuario autenticado:
+    <strong>
+        {{ current_user.usuario }}
+    </strong>
+</p>
+
+<table class="table table-bordered table-striped">
+
+    <thead>
+
+        <tr>
+
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Precio</th>
+            <th>Stock</th>
+
+        </tr>
+
+    </thead>
+
+    <tbody>
+
+        {% for producto in productos %}
+
+        <tr>
+
+            <td>
+                {{ producto.id }}
+            </td>
+
+            <td>
+                {{ producto.nombre }}
+            </td>
+
+            <td>
+                {{ producto.precio }}
+            </td>
+
+            <td>
+                {{ producto.stock }}
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+
+            <td
+                colspan="4"
+                class="text-center"
+            >
+                No existen productos registrados.
+            </td>
+
+        </tr>
+
+        {% endfor %}
+
+    </tbody>
+
+</table>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 13. templates/clientes.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Clientes
+{% endblock %}
+
+{% block content %}
+
+<h1>
+    Clientes
+</h1>
+
+<table class="table table-bordered">
+
+    <thead>
+
+        <tr>
+
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Correo</th>
+            <th>Teléfono</th>
+
+        </tr>
+
+    </thead>
+
+    <tbody>
+
+        {% for cliente in clientes %}
+
+        <tr>
+
+            <td>
+                {{ cliente.id }}
+            </td>
+
+            <td>
+                {{ cliente.nombre }}
+            </td>
+
+            <td>
+                {{ cliente.correo }}
+            </td>
+
+            <td>
+                {{ cliente.telefono }}
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+
+            <td
+                colspan="4"
+                class="text-center"
+            >
+                No existen clientes registrados.
+            </td>
+
+        </tr>
+
+        {% endfor %}
+
+    </tbody>
+
+</table>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 14. templates/proveedores.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Proveedores
+{% endblock %}
+
+{% block content %}
+
+<h1>
+    Proveedores
+</h1>
+
+<table class="table table-bordered">
+
+    <thead>
+
+        <tr>
+
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Teléfono</th>
+            <th>Correo</th>
+
+        </tr>
+
+    </thead>
+
+    <tbody>
+
+        {% for proveedor in proveedores %}
+
+        <tr>
+
+            <td>
+                {{ proveedor.id }}
+            </td>
+
+            <td>
+                {{ proveedor.nombre }}
+            </td>
+
+            <td>
+                {{ proveedor.telefono }}
+            </td>
+
+            <td>
+                {{ proveedor.correo }}
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+
+            <td
+                colspan="4"
+                class="text-center"
+            >
+                No existen proveedores registrados.
+            </td>
+
+        </tr>
+
+        {% endfor %}
+
+    </tbody>
+
+</table>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 15. templates/facturacion.html
+# ============================================================
+
+"""
+{% extends "base.html" %}
+
+{% block title %}
+Facturación
+{% endblock %}
+
+{% block content %}
+
+<h1>
+    Facturación
+</h1>
+
+<table class="table table-bordered">
+
+    <thead>
+
+        <tr>
+
+            <th>ID</th>
+            <th>Cliente</th>
+            <th>Producto</th>
+            <th>Cantidad</th>
+            <th>Total</th>
+
+        </tr>
+
+    </thead>
+
+    <tbody>
+
+        {% for factura in facturas %}
+
+        <tr>
+
+            <td>
+                {{ factura.id }}
+            </td>
+
+            <td>
+                {{ factura.cliente }}
+            </td>
+
+            <td>
+                {{ factura.producto }}
+            </td>
+
+            <td>
+                {{ factura.cantidad }}
+            </td>
+
+            <td>
+                {{ factura.total }}
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+
+            <td
+                colspan="5"
+                class="text-center"
+            >
+                No existen facturas registradas.
+            </td>
+
+        </tr>
+
+        {% endfor %}
+
+    </tbody>
+
+</table>
+
+{% endblock %}
+"""
+
+
+# ============================================================
+# 16. static/css/style.css
+# ============================================================
+
+"""
+body {
+    background-color: #f4f6f9;
+}
+
+.card {
+    border-radius: 10px;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+"""
+
+
+# ============================================================
+# 17. requirements.txt
+# ============================================================
+
+"""
+Flask
+Flask-Login
+Flask-WTF
+Werkzeug
+mysql-connector-python
+WTForms
+"""
+
+
+# ============================================================
+# FUNCIONAMIENTO DEL SISTEMA
+# ============================================================
+#
+# 1. El usuario entra a /registro.
+#
+# 2. Introduce usuario y contraseña.
+#
+# 3. generate_password_hash() transforma la contraseña.
+#
+# 4. El hash se almacena en MySQL.
+#
+# 5. El usuario entra a /login.
+#
+# 6. Se consulta el usuario mediante SELECT.
+#
+# 7. check_password_hash() comprueba la contraseña.
+#
+# 8. Si es correcta, login_user() crea la sesión.
+#
+# 9. El usuario entra al dashboard.
+#
+# 10. @login_required protege:
+#
+#     /dashboard
+#     /productos
+#     /clientes
+#     /proveedores
+#     /facturacion
+#
+# 11. current_user permite identificar al usuario activo.
+#
+# 12. /logout ejecuta logout_user().
+#
+# 13. Después del logout, las rutas protegidas vuelven
+#     a enviar al usuario hacia /login.
+#
+# ============================================================
